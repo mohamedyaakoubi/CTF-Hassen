@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+FOUND.txt
+run.log
+.venv/

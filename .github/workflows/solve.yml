@@ -1,0 +1,63 @@
+name: solve-sweep
+
+# Matrix sweep over (mode x charset x length band). Each job streams a
+# meet-in-the-middle preimage search for the layerup VM hash. ubuntu-latest
+# public runners give 4 vCPU / 16 GB RAM, up to 6 h/job, ~20 concurrent.
+
+on:
+  push:
+    branches: [ main, master ]
+    paths: [ 'layerup_solver.py', '.github/workflows/solve.yml' ]
+  workflow_dispatch: {}
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include:
+          # mode A: hashed input is the full flag "SecurinetsENIT{...}"  (N = 16 + secret_len)
+          - { mode: A, cs: low_us,     nmin: 25, nmax: 29 }   # secret 9..13
+          - { mode: A, cs: low,        nmin: 25, nmax: 29 }
+          - { mode: A, cs: low_dig_us, nmin: 24, nmax: 28 }   # secret 8..12
+          - { mode: A, cs: low_dig,    nmin: 24, nmax: 28 }
+          - { mode: A, cs: leet_sym,   nmin: 24, nmax: 28 }
+          - { mode: A, cs: alnum_us,   nmin: 23, nmax: 26 }   # secret 7..10
+          - { mode: A, cs: alnum,      nmin: 23, nmax: 26 }
+          - { mode: A, cs: printable,  nmin: 22, nmax: 25 }   # secret 6..9
+          # mode B: hashed input is only the secret (flag = SecurinetsENIT{secret})
+          - { mode: B, cs: low_us,     nmin: 9,  nmax: 13 }
+          - { mode: B, cs: low,        nmin: 9,  nmax: 13 }
+          - { mode: B, cs: low_dig_us, nmin: 8,  nmax: 12 }
+          - { mode: B, cs: alnum,      nmin: 7,  nmax: 10 }
+          - { mode: B, cs: printable,  nmin: 6,  nmax: 9  }
+    env:
+      STORE_CAP: "120000000"      # <=1.2e8 stored states (build-RAM bound)
+      BATCH_CAP: "40000000"       # streamed inner batch
+      STREAM_CAP: "150000000000"  # skip a single config above 1.5e11 states (too slow here)
+      TIME_CAP: "3000"            # seconds per config, then move on
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install numpy
+      - name: sweep
+        run: |
+          python layerup_solver.py sweep ${{ matrix.mode }} ${{ matrix.cs }} ${{ matrix.nmin }} ${{ matrix.nmax }} | tee run.log
+      - name: surface result
+        if: always()
+        run: |
+          if [ -f FOUND.txt ]; then
+            echo "## FLAG FOUND (mode=${{ matrix.mode }} cs=${{ matrix.cs }})" >> "$GITHUB_STEP_SUMMARY"
+            sed 's/^/    /' FOUND.txt >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=FLAG FOUND::$(tr '\n' ' ' < FOUND.txt)"
+          fi
+      - name: upload found
+        if: always() && hashFiles('FOUND.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: found-${{ matrix.mode }}-${{ matrix.cs }}
+          path: FOUND.txt

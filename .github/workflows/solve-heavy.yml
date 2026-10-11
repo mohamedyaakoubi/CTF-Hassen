@@ -1,0 +1,67 @@
+name: solve-heavy
+
+# Shard ONE heavy (mode, charset, length) config across many runners.
+# Each runner does outer-combo indices [shard::nshards]. Use for long secrets
+# whose single-config stream_total exceeds the fast sweep's cap.
+#
+# Dispatch inputs let you target e.g. mode=A cs=low_us N=30 (secret len 14),
+# split across 20 shards. Raise/lower nshards to trade runners vs per-job time.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:     { description: 'A (full flag) or B (secret only)', required: true, default: 'A' }
+      cs:       { description: 'charset name (low_us, low_dig_us, alnum, printable, ...)', required: true, default: 'low_us' }
+      N:        { description: 'length of HASHED input (A: 16+secret_len; B: secret_len)', required: true, default: '30' }
+      nshards:  { description: 'number of shards/runners', required: true, default: '20' }
+      store_cap:  { description: 'max stored states', required: false, default: '120000000' }
+      batch_cap:  { description: 'streamed inner batch', required: false, default: '40000000' }
+      time_cap:   { description: 'seconds per shard (0 = none)', required: false, default: '0' }
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.mk.outputs.shards }}
+    steps:
+      - id: mk
+        run: |
+          echo "shards=$(python3 -c "import json;print(json.dumps(list(range(${{ github.event.inputs.nshards }}))))")" >> "$GITHUB_OUTPUT"
+  shard:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: ${{ fromJson(needs.prep.outputs.shards) }}
+    env:
+      STORE_CAP: ${{ github.event.inputs.store_cap }}
+      BATCH_CAP: ${{ github.event.inputs.batch_cap }}
+      STREAM_CAP: "100000000000000"
+      TIME_CAP: ${{ github.event.inputs.time_cap }}
+      SHARD: ${{ matrix.shard }}
+      NSHARDS: ${{ github.event.inputs.nshards }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install numpy
+      - name: run shard
+        run: |
+          python layerup_solver.py auto ${{ github.event.inputs.mode }} ${{ github.event.inputs.cs }} ${{ github.event.inputs.N }} | tee run.log
+      - name: surface result
+        if: always()
+        run: |
+          if [ -f FOUND.txt ]; then
+            echo "## FLAG FOUND (shard ${{ matrix.shard }})" >> "$GITHUB_STEP_SUMMARY"
+            sed 's/^/    /' FOUND.txt >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=FLAG FOUND::$(tr '\n' ' ' < FOUND.txt)"
+          fi
+      - name: upload found
+        if: always() && hashFiles('FOUND.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: found-shard-${{ matrix.shard }}
+          path: FOUND.txt

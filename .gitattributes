@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+layerup binary
+layerup(1) binary
+analysis/disas.txt text eol=lf
